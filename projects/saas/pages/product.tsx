@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { useAuth } from '@clerk/nextjs';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { Protect, UserButton } from '@clerk/nextjs';
+import { Protect, SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
 
 import { PricingTableBoundary } from '../components/ClerkPricingFallback';
 
@@ -78,7 +78,7 @@ export default function Product() {
             </div>
 
             {/* Clerk Protect `plan` must use `user:...` or `org:...` (Billing plan keys in Clerk Dashboard). */}
-            <Protect plan="user:premium_subscription"
+            <Protect plan="user:free_user"
                 fallback={
                     <div className="container mx-auto px-4 py-12">
                         <header className="text-center mb-12">
@@ -89,6 +89,24 @@ export default function Product() {
                                 Unlock unlimited AI-powered business ideas
                             </p>
                         </header>
+                        <div className="mx-auto mb-8 max-w-2xl rounded-2xl border border-slate-200 bg-white/90 p-5 text-left shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/80">
+                            <SignedIn>
+                                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                    You are signed in, but this account does not have access to the required plan.
+                                </p>
+                                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                                    This page requires the Clerk plan <span className="font-mono">user:premium_subscription</span>. If you expected access, verify that the subscription exists in the same Clerk production instance connected to Vercel.
+                                </p>
+                            </SignedIn>
+                            <SignedOut>
+                                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                    Sign in to continue.
+                                </p>
+                                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                                    After signing in, access still depends on the Clerk plan <span className="font-mono">user:premium_subscription</span>.
+                                </p>
+                            </SignedOut>
+                        </div>
                         <div className="max-w-4xl mx-auto">
                             <PricingTableBoundary />
                         </div>
