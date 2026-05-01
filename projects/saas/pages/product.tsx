@@ -5,17 +5,27 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { useAuth } from '@clerk/nextjs';
-import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { Protect, SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
-
-import { PricingTableBoundary } from '../components/ClerkPricingFallback';
+import { UserButton } from '@clerk/nextjs';
 
 function IdeaGenerator() {
-    const { getToken } = useAuth();
+    const { getToken, isLoaded, isSignedIn } = useAuth();
     const [idea, setIdea] = useState<string>('…loading');
 
     useEffect(() => {
+        if (!isLoaded) {
+            return;
+        }
+
+        if (!isSignedIn) {
+            setIdea('Authentication required');
+            return;
+        }
+
         let buffer = '';
+        let isCancelled = false;
+        const controller = new AbortController();
+        const decoder = new TextDecoder();
+
         (async () => {
             const jwt = await getToken();
             if (!jwt) {
@@ -23,18 +33,46 @@ function IdeaGenerator() {
                 return;
             }
 
-            await fetchEventSource('/api', {
+            setIdea('');
+
+            const response = await fetch('/api', {
+                signal: controller.signal,
                 headers: { Authorization: `Bearer ${jwt}` },
-                onmessage(ev) {
-                    buffer += ev.data;
-                    setIdea(buffer);
-                },
-                onerror(err) {
-                    console.error('SSE error:', err);
-                }
             });
-        })();
-    }, []);
+
+            if (!response.ok) {
+                throw new Error(`Request failed with status ${response.status}`);
+            }
+
+            if (!response.body) {
+                throw new Error('Streaming response body is missing');
+            }
+
+            const reader = response.body.getReader();
+
+            while (!isCancelled) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    break;
+                }
+
+                buffer += decoder.decode(value, { stream: true });
+                setIdea(buffer);
+            }
+        })().catch((err: unknown) => {
+            if (controller.signal.aborted || isCancelled) {
+                return;
+            }
+
+            console.error('Stream error:', err);
+            setIdea('Could not generate an idea. Check the browser console and API logs.');
+        });
+
+        return () => {
+            isCancelled = true;
+            controller.abort();
+        };
+    }, [getToken, isLoaded, isSignedIn]);
 
     return (
         <div className="container mx-auto px-4 py-12">
@@ -53,6 +91,12 @@ function IdeaGenerator() {
                         <div className="flex items-center justify-center py-12">
                             <div className="animate-pulse text-gray-400">
                                 Generating your business idea...
+                            </div>
+                        </div>
+                    ) : idea === '' ? (
+                        <div className="flex items-center justify-center py-12">
+                            <div className="animate-pulse text-gray-400">
+                                Receiving response...
                             </div>
                         </div>
                     ) : (
@@ -77,44 +121,7 @@ export default function Product() {
                 <UserButton showName={true} />
             </div>
 
-            {/* Clerk Protect `plan` must use `user:...` or `org:...` (Billing plan keys in Clerk Dashboard). */}
-            <Protect plan="user:free_user"
-                fallback={
-                    <div className="container mx-auto px-4 py-12">
-                        <header className="text-center mb-12">
-                            <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent mb-4">
-                                Choose Your Plan
-                            </h1>
-                            <p className="text-gray-600 dark:text-gray-400 text-lg mb-8">
-                                Unlock unlimited AI-powered business ideas
-                            </p>
-                        </header>
-                        <div className="mx-auto mb-8 max-w-2xl rounded-2xl border border-slate-200 bg-white/90 p-5 text-left shadow-sm backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/80">
-                            <SignedIn>
-                                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                                    You are signed in, but this account does not have access to the required plan.
-                                </p>
-                                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                                    This page requires the Clerk plan <span className="font-mono">user:premium_subscription</span>. If you expected access, verify that the subscription exists in the same Clerk production instance connected to Vercel.
-                                </p>
-                            </SignedIn>
-                            <SignedOut>
-                                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                                    Sign in to continue.
-                                </p>
-                                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                                    After signing in, access still depends on the Clerk plan <span className="font-mono">user:premium_subscription</span>.
-                                </p>
-                            </SignedOut>
-                        </div>
-                        <div className="max-w-4xl mx-auto">
-                            <PricingTableBoundary />
-                        </div>
-                    </div>
-                }
-            >
-                <IdeaGenerator />
-            </Protect>
+            <IdeaGenerator />
         </main>
     );
 }
