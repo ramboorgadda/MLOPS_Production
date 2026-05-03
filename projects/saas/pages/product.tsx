@@ -20,6 +20,7 @@ function ConsultationForm() {
     // Streaming state
     const [output, setOutput] = useState('');
     const [loading, setLoading] = useState(false);
+    const hasOutputRef = { current: false };
 
     async function handleSubmit(e: FormEvent) {
         e.preventDefault();
@@ -48,8 +49,25 @@ function ConsultationForm() {
                 date_of_visit: visitDate?.toISOString().slice(0, 10),
                 notes,
             }),
+            async onopen(response) {
+                if (response.ok) {
+                    return;
+                }
+
+                const errorText = await response.text();
+                setOutput(errorText || `Request failed with status ${response.status}`);
+                setLoading(false);
+                throw new Error(`Request failed with status ${response.status}`);
+            },
             onmessage(ev) {
-                buffer += ev.data;
+                if (ev.data.startsWith('[ERROR]')) {
+                    setOutput('Error: ' + ev.data.slice(8));
+                    setLoading(false);
+                    controller.abort();
+                    return;
+                }
+                buffer += ev.data.replace(/\\n/g, '\n');
+                hasOutputRef.current = true;
                 setOutput(buffer);
             },
             onclose() { 
@@ -58,7 +76,11 @@ function ConsultationForm() {
             onerror(err) {
                 console.error('SSE error:', err);
                 controller.abort();
+                if (!hasOutputRef.current) {
+                    setOutput('Could not complete the consultation request.');
+                }
                 setLoading(false);
+                throw err;
             },
         });
     }
