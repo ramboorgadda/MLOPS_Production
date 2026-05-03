@@ -3,3 +3,4 @@ fastapi-clerk-auth>=0.0.9
 openai>=1.0.0
 fastapi-clerk-auth
 pydantic
+uvicorn[standard]>=0.30
