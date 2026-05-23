@@ -1,0 +1,261 @@
+==============================================================
+AWS CLI COMMANDS EXECUTED - Digital Twin Deployment Session
+==============================================================
+
+--- IAM ---
+
+# Attach Bedrock full access to Lambda role
+aws iam attach-role-policy --role-name twin-api-role-xfqkmmsf --policy-arn arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+
+# Verify attached policies
+aws iam list-attached-role-policies --role-name twin-api-role-xfqkmmsf --output table
+
+
+--- LAMBDA ---
+
+# Check Lambda function configuration
+aws lambda get-function --function-name twin-api --output json
+
+# Check Lambda concurrency settings
+aws lambda get-function-concurrency --function-name twin-api
+
+# Delete reserved concurrency limit (was 0 = full throttle)
+aws lambda delete-function-concurrency --function-name twin-api
+
+# Update Lambda code (deploy zip)
+aws lambda update-function-code --function-name twin-api --zip-file fileb://lambda-deployment.zip --output json
+aws lambda update-function-code --function-name twin-api --zip-file fileb://lambda-deployment.zip --output text --query "LastUpdateStatus"
+
+# Wait for Lambda to finish updating
+aws lambda wait function-updated --function-name twin-api
+
+# Update Lambda environment variables (fix model ID)
+aws lambda update-function-configuration --function-name twin-api --environment "Variables={S3_BUCKET=twin-memory-355750680577,USE_S3=true,CORS_ORIGINS=https://d2g9xuflryy9c6.cloudfront.net,DEFAULT_AWS_REGION=us-east-1,BEDROCK_MODEL_ID=amazon.nova-2-lite-v1:0}"
+
+# Switch to cross-region inference profile (nova-lite)
+aws lambda update-function-configuration --function-name twin-api --environment "Variables={S3_BUCKET=twin-memory-355750680577,USE_S3=true,CORS_ORIGINS=https://d2g9xuflryy9c6.cloudfront.net,DEFAULT_AWS_REGION=us-east-1,BEDROCK_MODEL_ID=us.amazon.nova-lite-v1:0}"
+
+# Switch to nova-micro
+aws lambda update-function-configuration --function-name twin-api --environment "Variables={S3_BUCKET=twin-memory-355750680577,USE_S3=true,CORS_ORIGINS=https://d2g9xuflryy9c6.cloudfront.net,DEFAULT_AWS_REGION=us-east-1,BEDROCK_MODEL_ID=us.amazon.nova-micro-v1:0}"
+
+# Switch to nova-pro
+aws lambda update-function-configuration --function-name twin-api --environment "Variables={S3_BUCKET=twin-memory-355750680577,USE_S3=true,CORS_ORIGINS=https://d2g9xuflryy9c6.cloudfront.net,DEFAULT_AWS_REGION=us-east-1,BEDROCK_MODEL_ID=us.amazon.nova-pro-v1:0}"
+
+# Check Lambda last update status and code size
+aws lambda get-function --function-name twin-api --output text --query "Configuration.[LastUpdateStatus,CodeSize]"
+
+
+--- CLOUDWATCH LOGS ---
+
+# View recent Lambda errors
+aws logs filter-log-events --log-group-name /aws/lambda/twin-api --start-time <epoch_ms> --filter-pattern "ERROR" --output json
+
+# View all recent Lambda logs (last 5 minutes)
+aws logs filter-log-events --log-group-name /aws/lambda/twin-api --start-time <epoch_ms> --output json
+
+# PowerShell one-liner to get logs from last 5 minutes
+aws logs filter-log-events --log-group-name /aws/lambda/twin-api --start-time ([DateTimeOffset]::UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds()) --filter-pattern "ERROR" --output json | ConvertFrom-Json | Select-Object -ExpandProperty events | Select-Object -Last 10 | ForEach-Object { $_.message }
+
+aws logs filter-log-events --log-group-name /aws/lambda/twin-api --start-time ([DateTimeOffset]::UtcNow.AddMinutes(-3).ToUnixTimeMilliseconds()) --output json | ConvertFrom-Json | Select-Object -ExpandProperty events | ForEach-Object { $_.message } | Select-Object -Last 15
+
+
+--- API GATEWAY (HTTP API v2) ---
+
+# List HTTP APIs
+aws apigatewayv2 get-apis --output json
+
+# Get API details
+aws apigatewayv2 get-api --api-id gphqcepu8d --output json
+
+# Get routes
+aws apigatewayv2 get-routes --api-id gphqcepu8d --output json
+
+# Get CORS configuration
+aws apigatewayv2 get-api --api-id gphqcepu8d --query "CorsConfiguration" --output json
+
+# Update CORS configuration
+aws apigatewayv2 update-api --api-id gphqcepu8d --cors-configuration "AllowOrigins=https://d2g9xuflryy9c6.cloudfront.net,AllowMethods=GET POST OPTIONS,AllowHeaders=Content-Type Authorization,MaxAge=300"
+
+# Delete the manual OPTIONS route (was overriding native CORS)
+aws apigatewayv2 delete-route --api-id gphqcepu8d --route-id ah6s9n0
+
+# Get integrations
+aws apigatewayv2 get-integrations --api-id gphqcepu8d --output json
+
+# Check REST APIs (v1)
+aws apigateway get-rest-apis --query "items[?contains(name, 'twin') || contains(name, 'Twin')].{Name:name,Id:id}" --output table
+
+
+--- CLOUDFRONT ---
+
+# List distributions
+aws cloudfront list-distributions --output json
+
+# Get distribution config (to find origin protocol)
+aws cloudfront get-distribution-config --id E1WA591VA18O1N --output json
+
+# Update distribution (fix origin protocol from https-only to http-only)
+# (Done via console - changed ViewerProtocolPolicy / OriginProtocolPolicy)
+
+
+--- S3 ---
+
+# List objects in frontend bucket
+aws s3 ls s3://twin-frontend-02181982/
+
+# Sync frontend build to S3
+aws s3 sync out/ s3://twin-frontend-02181982/ --delete
+
+# Fix Cache-Control on index.html (no-cache so browser always fetches fresh)
+aws s3 cp s3://twin-frontend-02181982/index.html s3://twin-frontend-02181982/index.html --metadata-directive REPLACE --cache-control "no-cache, no-store, must-revalidate" --content-type "text/html"
+
+# Fix Cache-Control on JS chunks (immutable, 1-year cache)
+aws s3 cp s3://twin-frontend-02181982/_next/static/ s3://twin-frontend-02181982/_next/static/ --recursive --metadata-directive REPLACE --cache-control "public, max-age=31536000, immutable" --exclude "*" --include "*.js" --include "*.css"
+
+# List memory bucket
+aws s3 ls s3://twin-memory-355750680577/
+
+
+--- BEDROCK ---
+
+# List foundation models
+aws bedrock list-foundation-models --region us-east-1 --output json
+
+# List inference profiles (to find correct cross-region profile IDs)
+aws bedrock list-inference-profiles --region us-east-1 --output json
+
+
+--- TEST COMMANDS (PowerShell) ---
+
+# Test chat endpoint
+Invoke-WebRequest -UseBasicParsing -Uri "https://gphqcepu8d.execute-api.us-east-1.amazonaws.com/chat" -Method POST -ContentType "application/json" -Body '{"message":"hello"}' -TimeoutSec 35 | Select-Object StatusCode, Content
+
+# Test OPTIONS preflight (CORS check)
+Invoke-WebRequest -Uri "https://gphqcepu8d.execute-api.us-east-1.amazonaws.com/chat" -Method OPTIONS -Headers @{"Origin"="https://d2g9xuflryy9c6.cloudfront.net"; "Access-Control-Request-Method"="POST"; "Access-Control-Request-Headers"="Content-Type"} | Select-Object StatusCode, @{n="CORS Headers";e={$_.Headers | Where-Object {$_.Key -match "Access-Control"}}}
+
+# Test root endpoint
+Invoke-WebRequest -UseBasicParsing -Uri "https://gphqcepu8d.execute-api.us-east-1.amazonaws.com/" | Select-Object StatusCode, Content
+
+
+==============================================================
+KEY RESOURCE IDs
+==============================================================
+Lambda Function:       twin-api
+Lambda IAM Role:       twin-api-role-xfqkmmsf
+API Gateway (HTTP v2): gphqcepu8d
+API Endpoint:          https://gphqcepu8d.execute-api.us-east-1.amazonaws.com
+CloudFront ID:         E1WA591VA18O1N
+CloudFront Domain:     https://d2g9xuflryy9c6.cloudfront.net
+S3 Frontend Bucket:    twin-frontend-02181982
+S3 Memory Bucket:      twin-memory-355750680577
+AWS Account ID:        355750680577
+Region:                us-east-1
+Current Bedrock Model: us.amazon.nova-pro-v1:0  (throttled as of May 21 2026)
+
+
+==============================================================
+ISSUES RESOLVED
+==============================================================
+1. CloudFront 504          -> Origin protocol was https-only, S3 website is HTTP-only. Fixed to http-only.
+2. CORS missing headers    -> OPTIONS route pointed to Lambda instead of API GW native CORS. Deleted the route.
+3. Wrong API URL in bundle -> Frontend was built with localhost:8000. Rebuilt with correct API GW URL.
+4. S3 stale cache          -> index.html had no Cache-Control. Set to no-cache.
+5. Lambda throttled to 0   -> ReservedConcurrentExecutions=0 (full block). Deleted the limit.
+6. Bedrock rate exceeded   -> Upgraded model from nova-lite to nova-2-lite.
+7. Bedrock access denied   -> Lambda IAM role missing Bedrock perms. Attached AmazonBedrockFullAccess.
+8. Invalid message format  -> System prompt injected as user message (two consecutive user roles). Fixed to use system= parameter in converse().
+9. Model ID wrong format   -> nova-2-lite-v1:0 needs on-demand, not supported. Switched to us.amazon.nova-*:0 inference profiles.
+10. Data files missing     -> PowerShell Compress-Archive with * doesn't recurse. Rebuilt zip with Python zipfile (forward-slash paths).
+
+PENDING: Daily Bedrock token quota exhausted on Nova Lite/Micro/Pro. Resets at midnight UTC.
+
+
+==============================================================
+SESSION 2 - May 23, 2026  (Quota Debug & Model Testing)
+==============================================================
+
+--- API GATEWAY - DIAGNOSTICS ---
+
+# Verify POST /chat route and all routes still exist
+aws apigatewayv2 get-routes --api-id gphqcepu8d --output json
+# Result: POST /chat (2w806sa), GET / (ozbp23d), ANY /{proxy+} (s1r6ej9) -- all present
+
+# Check CORS config
+aws apigatewayv2 get-api --api-id gphqcepu8d --query "CorsConfiguration" --output json
+# Result: AllowOrigins=*, AllowMethods=*, AllowHeaders=*, MaxAge=300
+
+# Test OPTIONS preflight (confirmed 200 OK with correct CORS headers)
+Invoke-WebRequest -Uri "https://gphqcepu8d.execute-api.us-east-1.amazonaws.com/chat" -Method OPTIONS `
+  -Headers @{"Origin"="https://d2g9xuflryy9c6.cloudfront.net"; "Access-Control-Request-Method"="POST"; "Access-Control-Request-Headers"="Content-Type"} `
+  | Select-Object StatusCode, @{n="CORS Headers";e={$_.Headers | Where-Object {$_.Key -match "Access-Control"}}}
+
+
+--- CLOUDWATCH LOGS - DIAGNOSTICS (May 23) ---
+
+# Fetch Lambda logs (last 3 min) - confirmed still throttled
+aws logs filter-log-events --log-group-name /aws/lambda/twin-api `
+  --start-time ([DateTimeOffset]::UtcNow.AddMinutes(-3).ToUnixTimeMilliseconds()) `
+  --output json | ConvertFrom-Json | Select-Object -ExpandProperty events `
+  | ForEach-Object { $_.message } | Select-Object -Last 6
+
+# Error seen: ThrottlingException - Too many tokens per day, please wait before trying again
+# Model at time: us.amazon.nova-pro-v1:0
+
+
+--- BEDROCK - MODEL TESTING (Python boto3) ---
+
+# Tested directly via Python to bypass AWS CLI JSON escaping issues
+# Script: backend/test_bedrock.py
+
+# Models tested and results:
+# us.amazon.nova-micro-v1:0                    -> ThrottlingException (daily quota exhausted)
+# us.anthropic.claude-haiku-4-5-20251001-v1:0  -> ResourceNotFoundException (profile not available)
+# mistral.ministral-3-14b-instruct             -> ThrottlingException (daily quota exhausted)
+# google.gemma-3-12b-it                        -> ThrottlingException (daily quota exhausted)
+# deepseek.v3.2                                -> ThrottlingException (daily quota exhausted)
+# zai.glm-4.7-flash                            -> ThrottlingException (daily quota exhausted)
+# amazon.nova-2-lite-v1:0                      -> ValidationException (needs on-demand, use inference profile)
+# anthropic.claude-haiku-4-5-20251001-v1:0     -> ValidationException (needs inference profile)
+
+# List all active text foundation models
+aws bedrock list-foundation-models --region us-east-1 --output json
+# (AccessDeniedException for list-service-quotas - IAM user lacks servicequotas:ListServiceQuotas)
+
+# Service quotas check (FAILED - no IAM permission)
+aws service-quotas list-service-quotas --service-code bedrock --output json
+# Error: AccessDeniedException - user aiengineer lacks servicequotas:ListServiceQuotas
+
+
+--- LAMBDA - API TESTS (May 23) ---
+
+# Test POST /chat - confirmed 503 (Bedrock throttled)
+try {
+    $r = Invoke-WebRequest -UseBasicParsing -Uri "https://gphqcepu8d.execute-api.us-east-1.amazonaws.com/chat" `
+      -Method POST -ContentType "application/json" -Body '{"message":"hello"}' -TimeoutSec 35
+    Write-Host "Status: $($r.StatusCode)"; Write-Host $r.Content
+} catch {
+    $resp = $_.Exception.Response
+    $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+    Write-Host "HTTP $($resp.StatusCode.value__): $($reader.ReadToEnd())"
+}
+# Result: HTTP 503 (ThrottlingException from Bedrock - daily token quota exhausted)
+
+# Note: 405 seen in browser = navigating to /chat URL directly via GET (expected, route is POST only)
+# Note: favicon.ico 404 = browser auto-request, no favicon in frontend (harmless)
+
+
+--- STATUS AS OF MAY 23 ---
+
+Current Lambda model env var: us.amazon.nova-pro-v1:0
+All Nova inference profiles throttled (daily token quota exhausted account-wide)
+Infrastructure fully deployed and correct - waiting on Bedrock quota reset (midnight UTC)
+
+# To switch model when quota resets (try micro first - cheapest):
+aws lambda update-function-configuration --function-name twin-api `
+  --environment "Variables={S3_BUCKET=twin-memory-355750680577,USE_S3=true,CORS_ORIGINS=https://d2g9xuflryy9c6.cloudfront.net,DEFAULT_AWS_REGION=us-east-1,BEDROCK_MODEL_ID=us.amazon.nova-micro-v1:0}"
+
+# Quick test after quota resets:
+python test_bedrock.py
+Invoke-WebRequest -UseBasicParsing -Uri "https://gphqcepu8d.execute-api.us-east-1.amazonaws.com/chat" `
+  -Method POST -ContentType "application/json" -Body '{"message":"hello"}' -TimeoutSec 35 `
+  | Select-Object StatusCode, Content

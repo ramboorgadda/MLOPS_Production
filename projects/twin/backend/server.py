@@ -8,6 +8,7 @@ import json
 import uuid
 from datetime import datetime
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from context import prompt
 
@@ -29,7 +30,8 @@ app.add_middleware(
 # Initialize Bedrock client - see Q42 on https://edwarddonner.com/faq if the Region gives you problems
 bedrock_client = boto3.client(
     service_name="bedrock-runtime", 
-    region_name=os.getenv("DEFAULT_AWS_REGION", "us-east-1")
+    region_name=os.getenv("DEFAULT_AWS_REGION", "us-east-1"),
+    config=Config(retries={"max_attempts": 1, "mode": "standard"})
 )
 
 # Bedrock model selection - see Q42 on https://edwarddonner.com/faq for more
@@ -106,17 +108,10 @@ def save_conversation(session_id: str, messages: List[Dict]):
 def call_bedrock(conversation: List[Dict], user_message: str) -> str:
     """Call AWS Bedrock with conversation history"""
     
-    # Build messages in Bedrock format
+    # Build messages in Bedrock converse format (must alternate user/assistant)
     messages = []
     
-    # Add system prompt as first user message
-    # Or there's a better way to do this - pass in system=[{"text": prompt()}] to the converse call below
-    messages.append({
-        "role": "user", 
-        "content": [{"text": f"System: {prompt()}"}]
-    })
-    
-    # Add conversation history (limit to last 25 exchanges)
+    # Add conversation history (limit to last 50 messages)
     for msg in conversation[-50:]:
         messages.append({
             "role": msg["role"],
@@ -130,9 +125,10 @@ def call_bedrock(conversation: List[Dict], user_message: str) -> str:
     })
     
     try:
-        # Call Bedrock using the converse API
+        # Call Bedrock using the converse API with system prompt in system parameter
         response = bedrock_client.converse(
             modelId=BEDROCK_MODEL_ID,
+            system=[{"text": prompt()}],
             messages=messages,
             inferenceConfig={
                 "maxTokens": 2000,
@@ -153,6 +149,9 @@ def call_bedrock(conversation: List[Dict], user_message: str) -> str:
         elif error_code == 'AccessDeniedException':
             print(f"Bedrock access denied: {e}")
             raise HTTPException(status_code=403, detail="Access denied to Bedrock model")
+        elif error_code == 'ThrottlingException':
+            print(f"Bedrock throttled: {e}")
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable due to rate limits. Please try again later.")
         else:
             print(f"Bedrock error: {e}")
             raise HTTPException(status_code=500, detail=f"Bedrock error: {str(e)}")
